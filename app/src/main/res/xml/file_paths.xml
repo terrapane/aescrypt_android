@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Standard primary internal flash storage mapping (/storage/emulated/0) -->
+    <external-path name="internal_primary" path="." />
+
+    <!-- Official system path link for removable SD cards and secondary drives -->
+    <external-path name="sd_card" path="/../.." />
+</paths>

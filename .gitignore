@@ -1,0 +1,23 @@
+# --- Project Wide ---
+.gradle/
+**/build/
+/local.properties
+/captures/
+.externalNativeBuild/
+.cxx/
+.kotlin/
+
+# --- IDE (IntelliJ/Android Studio) ---
+.idea/
+*.iml
+
+# --- OS Specific ---
+.DS_Store
+Thumbs.db
+
+# --- Secrets & Binaries (Safety Net) ---
+*.jks
+*.keystore
+*.apk
+*.aab
+*.dm
