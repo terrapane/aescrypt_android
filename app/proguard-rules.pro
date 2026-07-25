@@ -19,3 +19,19 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+
+# proguard-rules.pro
+
+# Preserve native method linkage across the app
+-keepclasseswithmembernames,includedescriptorclasses class * {
+    native <methods>;
+}
+
+# Preserve the NativeBridge singleton and all its members
+-keep class com.terrapane.aescrypt.NativeBridge { *; }
+-keepclassmembers class com.terrapane.aescrypt.NativeBridge { *; }
+
+# Preserve the NativeProgress data class, its fields, and its constructors for JNI
+-keep class com.terrapane.aescrypt.NativeProgress { *; }
+-keepclassmembers class com.terrapane.aescrypt.NativeProgress { *; }
