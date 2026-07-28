@@ -29,6 +29,7 @@ import android.os.storage.StorageManager
 import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.system.Os
+import androidx.core.content.FileProvider
 import java.io.File
 import java.io.IOException
 
@@ -49,6 +50,29 @@ object StorageHelper {
         }
     }
 
+    // Normalizes internal kernel, storage daemon, and vendor-specific mount
+    // paths into canonical user-space /storage/ paths to prevent EACCES
+    // (Permission Denied)
+    private fun sanitizeCanonicalPath(path: String?): String? {
+        if (path.isNullOrBlank()) return null
+        var cleanPath = path
+
+        // Translate internal user-isolated kernel mounts (/mnt/user/X/emulated/X or /mnt/pass_through/X/emulated/X)
+        cleanPath = cleanPath.replace(Regex("^/mnt/(user|pass_through)/\\d+/emulated/(\\d+)"), "/storage/emulated/$2")
+
+        // Translate external media mount points (/mnt/media_rw/XXXX-XXXX)
+        if (cleanPath.startsWith("/mnt/media_rw/")) {
+            cleanPath = cleanPath.replace("/mnt/media_rw/", "/storage/")
+        }
+
+        // Normalize legacy symlinks (/storage/emulated/legacy)
+        if (cleanPath.startsWith("/storage/emulated/legacy")) {
+            cleanPath = cleanPath.replace("/storage/emulated/legacy", "/storage/emulated/0")
+        }
+
+        return cleanPath
+    }
+
     fun getRealPathFromUri(context: Context, uri: Uri): String? {
         var pfd: ParcelFileDescriptor? = null
         try {
@@ -59,7 +83,7 @@ object StorageHelper {
             if (realPath.isNullOrEmpty() || realPath.startsWith("/proc/") || realPath.startsWith("/fd/")) {
                 return null
             }
-            return realPath
+            return sanitizeCanonicalPath(realPath)
         } catch (e: Exception) {
             e.printStackTrace()
             return null
@@ -71,12 +95,42 @@ object StorageHelper {
         }
     }
 
+    // Returns true if the app possesses full, unrestricted filesystem access.
+    // On Android 11+ (API 30+), checks MANAGE_EXTERNAL_STORAGE permission state.
+    // On Android 10 and lower, returns true as legacy filesystem permissions apply.
     private fun isExternalStorageManagerFallback(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             Environment.isExternalStorageManager()
         } else {
             true
         }
+    }
+
+    // Queries the system MediaStore database directly for the exact, unique
+    // physical path backing a content:// URI. Prevents ambiguity when
+    // identical files exist in different folders
+    private fun getExactPathFromContentUri(context: Context, uri: Uri): String? {
+        val projection = arrayOf(MediaStore.MediaColumns.DATA)
+        try {
+            context.contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val dataIndex = cursor.getColumnIndex(MediaStore.MediaColumns.DATA)
+                    if (dataIndex != -1) {
+                        val path = cursor.getString(dataIndex)
+                        if (!path.isNullOrBlank()) {
+                            val cleanPath = sanitizeCanonicalPath(path) ?: path
+                            val file = File(cleanPath)
+                            if (file.exists()) {
+                                return file.absolutePath
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (_: Exception) {
+            // Fall back gracefully if provider restricts DATA column access
+        }
+        return null
     }
 
     private fun findPhysicalParentDir(context: Context, sourceUri: Uri): File? {
@@ -147,6 +201,40 @@ object StorageHelper {
         return null
     }
 
+    // Resolves the physical parent directory for a given source URI
+    // (Primary method when MANAGE_EXTERNAL_STORAGE is active.)
+    fun resolveParentDirectory(context: Context, sourceUri: Uri): File {
+        // Try to find the physical parent directory on disk first (resolves "Recent" virtual URIs)
+        val directPath = getRealPathFromUri(context, sourceUri)
+        if (!directPath.isNullOrEmpty()) {
+            File(directPath).parentFile?.let { return it }
+        }
+
+        // Try MediaStore database for the exact physical path
+        val exactMediaStorePath = getExactPathFromContentUri(context, sourceUri)
+        if (!exactMediaStorePath.isNullOrEmpty()) {
+            File(exactMediaStorePath).parentFile?.let { return it }
+        }
+
+        // Physical storage volume traversal fallback
+        val physicalParent = findPhysicalParentDir(context, sourceUri)
+        if (physicalParent != null) {
+            return physicalParent
+        }
+
+        // Construct file path using resolveRelativePathAndVolume
+        val (originalRelativePath, volumeId) = resolveRelativePathAndVolume(context, sourceUri)
+        val baseStoragePath =
+            if (volumeId.equals("external_primary", ignoreCase = true) || volumeId.isBlank()) {
+                Environment.getExternalStorageDirectory().absolutePath
+            } else {
+                "/storage/$volumeId"
+            }
+        val cleanRelativePath = originalRelativePath.trimStart('/')
+        return File(baseStoragePath, cleanRelativePath)
+    }
+
+    // Check for the existing of existing files to prevent overwriting them
     fun findExistingCollision(
         context: Context, fileUris: List<Uri>, isEncrypting: Boolean
     ): String? {
@@ -161,19 +249,10 @@ object StorageHelper {
             val targetName = getOutputFileName(originalName, isEncrypting)
 
             if (isExternalStorageManagerFallback()) {
-                // First try kernel links, then fall back to the robust physical storage search engine
-                val directPath = getRealPathFromUri(context, sourceUri)
-                val parentDir = if (!directPath.isNullOrEmpty()) {
-                    File(directPath).parentFile
-                } else {
-                    findPhysicalParentDir(context, sourceUri)
-                }
-
-                if (parentDir != null) {
-                    val targetFile = File(parentDir, targetName)
-                    if (targetFile.exists()) {
-                        return targetName
-                    }
+                val parentDir = resolveParentDirectory(context, sourceUri)
+                val targetFile = File(parentDir, targetName)
+                if (targetFile.exists()) {
+                    return targetName
                 }
             }
         }
@@ -201,14 +280,20 @@ object StorageHelper {
                         volumeId.lowercase()
                     }
 
-                    // If the path segment contains the file name, strip it to get the raw parent directory
-                    if (pathSegment.contains("/")) {
+                    // Check if path segment is a synthetic ID from "Recent" (e.g. msf:154, image:102, or pure numbers)
+                    val isSyntheticId = pathSegment.matches(Regex("^(msf|image|video|audio|document|downloads):.*"))
+                            || pathSegment.all { it.isDigit() }
+
+                    if (isSyntheticId) {
+                        // Synthetic virtual ID: clear path so fallback mechanism takes over cleanly
+                        detectedPath = ""
+                    } else if (pathSegment.contains("/")) {
                         val folderPart = pathSegment.substringBeforeLast("/")
                         if (folderPart.isNotBlank()) {
                             detectedPath = folderPart
                         }
                     } else {
-                        // It's in the root folder of that storage volume
+                        // Root folder of that storage volume
                         detectedPath = ""
                     }
 
@@ -278,18 +363,8 @@ object StorageHelper {
         val targetName = getOutputFileName(originalName, isEncrypting)
 
         if (isExternalStorageManagerFallback()) {
-            val (originalRelativePath, volumeId) = resolveRelativePathAndVolume(context, sourceUri)
-
-            val baseStoragePath =
-                if (volumeId.equals("external_primary", ignoreCase = true) || volumeId.isBlank()) {
-                    Environment.getExternalStorageDirectory().absolutePath
-                } else {
-                    "/storage/$volumeId"
-                }
-
-            val cleanRelativePath = originalRelativePath.trimStart('/')
-            val targetFile = File(baseStoragePath, "$cleanRelativePath$targetName")
-
+            val parentDir = resolveParentDirectory(context, sourceUri)
+            val targetFile = File(parentDir, targetName)
             targetFile.parentFile?.mkdirs()
 
             if (targetFile.exists()) {
@@ -307,7 +382,7 @@ object StorageHelper {
 
             // Wrap the raw File handle in FileProvider to output a legal content:// URI
             val contentUri = try {
-                androidx.core.content.FileProvider.getUriForFile(
+                FileProvider.getUriForFile(
                     context,
                     "${context.packageName}.fileprovider",
                     targetFile
