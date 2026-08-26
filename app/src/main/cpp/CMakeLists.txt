@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(aescrypt_android
-        VERSION 4.6.1.0
+        VERSION 4.7.0.0
         DESCRIPTION "AES Crypt for Android"
         HOMEPAGE_URL "https://www.aescrypt.com"
         LANGUAGES CXX)
@@ -9,7 +9,7 @@ project(aescrypt_android
 set(COPYRIGHT_TEXT "Copyright (C) 2026")
 set(AUTHOR_TEXT    "Terrapane Corporation")
 
-# Build a version number into the binary library
+# Build the project version and other data into the version.h file
 configure_file(version.h.in version.h @ONLY)
 
 add_subdirectory(dependencies)
