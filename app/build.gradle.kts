@@ -15,8 +15,8 @@ android {
         applicationId = "com.terrapane.aescrypt"
         minSdk = 26
         targetSdk = 36
-        versionCode = 5
-        versionName = "4.7.0"
+        versionCode = 6
+        versionName = "4.7.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

@@ -32,6 +32,7 @@ import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSiz
 import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
 import android.Manifest
 import android.content.pm.PackageManager
+import android.widget.Toast
 import androidx.activity.viewModels
 import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
@@ -47,6 +48,22 @@ class MainActivity : ComponentActivity() {
     ) { _ ->
         // After dealing with the notification pop-up, proceed to the All Files request
         checkAndRequestAllFilesPermission()
+    }
+
+    // Request permissions for Android 10 and lower
+    private val requestLegacyStoragePermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val readGranted = permissions[Manifest.permission.READ_EXTERNAL_STORAGE] ?: false
+        val writeGranted = permissions[Manifest.permission.WRITE_EXTERNAL_STORAGE] ?: false
+
+        if (!readGranted || !writeGranted) {
+            Toast.makeText(
+                this,
+                "Storage permission is required to encrypt or decrypt",
+                Toast.LENGTH_LONG
+            ).show()
+        }
     }
 
     @OptIn(ExperimentalMaterial3WindowSizeClassApi::class)
@@ -86,7 +103,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIncomingIntent(intent: Intent?) {
-        if (intent == null || intent.action == null) return
+        if (intent?.action == null) return
 
         //  Handle launching directly from Home Screen / App Launcher
         if (intent.action == Intent.ACTION_MAIN && intent.hasCategory(Intent.CATEGORY_LAUNCHER)) {
@@ -158,6 +175,26 @@ class MainActivity : ComponentActivity() {
                     data = "package:$packageName".toUri()
                 }
                 startActivity(intent)
+            }
+        } else {
+            // Android 10 and lower (API 29 and below)
+            val readGranted = ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.READ_EXTERNAL_STORAGE
+            ) == PackageManager.PERMISSION_GRANTED
+
+            val writeGranted = ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.WRITE_EXTERNAL_STORAGE
+            ) == PackageManager.PERMISSION_GRANTED
+
+            if (!readGranted || !writeGranted) {
+                requestLegacyStoragePermissionLauncher.launch(
+                    arrayOf(
+                        Manifest.permission.READ_EXTERNAL_STORAGE,
+                        Manifest.permission.WRITE_EXTERNAL_STORAGE
+                    )
+                )
             }
         }
     }
