@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(aescrypt_android
-        VERSION 4.7.0.0
+        VERSION 4.7.1.0
         DESCRIPTION "AES Crypt for Android"
         HOMEPAGE_URL "https://www.aescrypt.com"
         LANGUAGES CXX)

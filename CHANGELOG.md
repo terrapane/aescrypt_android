@@ -1,5 +1,9 @@
 # Change Log
 
+v4.7.1
+
+- Fixed a permission issue on older Android vesions
+
 v4.7.0
 
 - Updated dependencies
